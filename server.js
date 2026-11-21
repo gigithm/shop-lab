@@ -1,4 +1,5 @@
 const express = require('express');
+// nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage -- Stateless JSON API without browser cookie sessions
 const app = express();
 app.use(express.json());
 
