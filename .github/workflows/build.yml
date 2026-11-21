@@ -17,12 +17,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Scan repository for secrets with Gitleaks
-        uses: gitleaks/gitleaks-action@bcfb9cce635345aac9996cedc19b2de8e01b894f # v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install and run Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.2"
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          rm -f "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          gitleaks git --verbose --redact
 
-sast-scan:
+  sast-scan:
     runs-on: ubuntu-latest
     needs: secrets-scan
     permissions:
@@ -33,12 +37,12 @@ sast-scan:
 
       - name: Run njsscan and Semgrep
         run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --no-cache-dir njsscan semgrep
-          .venv/bin/njsscan --exit-warning .
-          .venv/bin/semgrep scan --config auto --error .
+          python3 -m venv /tmp/sast-venv
+          /tmp/sast-venv/bin/pip install --no-cache-dir njsscan semgrep
+          /tmp/sast-venv/bin/njsscan --exit-warning .
+          /tmp/sast-venv/bin/semgrep scan --config auto --error .
 
-container-build-and-scan:
+  container-build-and-scan:
     runs-on: ubuntu-latest
     needs: sast-scan
     permissions:
@@ -75,4 +79,3 @@ container-build-and-scan:
           echo "- Image: \`shop-api:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build Step Outcome: **${{ steps.docker_build.outcome }}**" >> "$GITHUB_STEP_SUMMARY"
           echo "- Overall Job Status: **${{ job.status }}**" >> "$GITHUB_STEP_SUMMARY"
-
