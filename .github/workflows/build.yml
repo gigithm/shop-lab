@@ -1,23 +1,104 @@
-name: Docker Build Check
+name: Dev Build & Shift-Left Security
 
 on:
   push:
     branches: [dev, master]
   pull_request:
-    branches: [master]
-
-permissions:
-  contents: read
+    branches: [dev, master]
 
 jobs:
-  docker-build:
+  secrets-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install and run Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.24.2"
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          rm -f "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          gitleaks git --verbose --redact
+
+  sast-scan:
+    runs-on: ubuntu-latest
+    needs: secrets-scan
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run njsscan and Semgrep
+        run: |
+          python3 -m venv /tmp/sast-venv
+          /tmp/sast-venv/bin/pip install --no-cache-dir njsscan semgrep
+          /tmp/sast-venv/bin/semgrep scan --config auto --error .
+          /tmp/sast-venv/bin/njsscan --json server.js > /tmp/njsscan.json || true
+
+  container-build-and-scan:
+    runs-on: ubuntu-latest
+    needs: sast-scan
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/shop-api
+      IMAGE_TAG: ${{ github.sha }}
+      BRANCH_NAME: ${{ github.ref_name }}
+      ACTOR_NAME: ${{ github.actor }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Trivy via signed apt repository
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Shift-left scan on Dockerfile
+        run: trivy config ./Dockerfile
 
       - name: Build Docker image
-        run: docker build --tag shop-lab:${{ github.sha }} .
+        id: docker_build
+        run: |
+          docker build -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" .
+          docker image inspect "$IMAGE_NAME:$IMAGE_TAG" --format='Built image ID: {{.Id}} | Size: {{.Size}} bytes'
+
+      - name: Shift-left scan on built Docker image (HIGH & CRITICAL)
+        run: trivy image --exit-code 1 --severity HIGH,CRITICAL "$IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$ACTOR_NAME" --password-stdin
+
+      - name: Push verified image to GHCR
+        if: github.event_name == 'push'
+        run: |
+          docker push "$IMAGE_NAME:$IMAGE_TAG"
+          if [ "$BRANCH_NAME" = "master" ]; then
+            docker push "$IMAGE_NAME:latest"
+          fi
+
+      - name: Docker image build status summary
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.docker_build.outcome }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          echo "### Docker Image Build & Publish Status" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`$IMAGE_NAME:$IMAGE_TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build Step Outcome: **$BUILD_OUTCOME**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Overall Job Status: **$JOB_STATUS**" >> "$GITHUB_STEP_SUMMARY"

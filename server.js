@@ -1,23 +1,23 @@
-const http = require("http");
+const express = require('express');
+// nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage -- Stateless JSON API without browser cookie sessions
+const app = express();
+app.use(express.json());
 
-const items = [
-  { id: 1, name: "Notebook", price: 120 },
-  { id: 2, name: "Mechanical Pencil", price: 80 }
+const products = [
+  { id: 1, name: 'Mechanical Keyboard', price: 79.0 },
+  { id: 2, name: 'USB-C Hub', price: 39.0 }
 ];
 
-const server = http.createServer((req, res) => {
-  if (req.url === "/items") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ items }));
-    return;
-  }
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Shop Lab Build OK");
+let cart = [];
+
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/products', (_req, res) => res.json(products));
+app.post('/cart', (req, res) => {
+  const item = products.find((p) => p.id === Number(req.body.productId));
+  if (!item) return res.status(404).json({ error: 'Product not found' });
+  cart.push(item);
+  res.status(201).json({ cart });
 });
 
-if (require.main === module) {
-  const port = process.env.PORT || 3000;
-  server.listen(port, () => console.log(`Listening on ${port}`));
-}
-
-module.exports = { server, items };
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Shopping API listening on ${port}`));
