@@ -6,33 +6,35 @@ on:
   pull_request:
     branches: [dev, master]
 
-permissions:
-  contents: read
-
 jobs:
   secrets-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Checkout repository with full history
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks secret scan
-        uses: gitleaks/gitleaks-action@v3
+      - name: Scan repository for secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@cb714969156235613292978d96e35c694a443741 # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   sast-scan:
     runs-on: ubuntu-latest
+    needs: secrets-scan
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4062e16d8770c # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: Run njsscan and Semgrep
         run: |
@@ -42,19 +44,38 @@ jobs:
 
   container-build-and-scan:
     runs-on: ubuntu-latest
-    needs: [secrets-scan, sast-scan]
+    needs: sast-scan
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install Trivy
-        run: curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install Trivy via signed apt repository
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
 
-      - name: Scan Dockerfile with Trivy
+      - name: Shift-left scan on Dockerfile
         run: trivy config ./Dockerfile
 
       - name: Build Docker image
-        run: docker build -t shop-api:${{ github.sha }} .
+        id: docker_build
+        run: |
+          docker build -t shop-api:${{ github.sha }} -t shop-api:latest .
+          docker image inspect shop-api:${{ github.sha }} --format='Built image ID: {{.Id}} | Size: {{.Size}} bytes'
 
-      - name: Scan built image for HIGH and CRITICAL issues
+      - name: Shift-left scan on built Docker image (HIGH & CRITICAL)
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL shop-api:${{ github.sha }}
+
+      - name: Docker image build status summary
+        if: always()
+        run: |
+          echo "### Docker Image Build Status" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`shop-api:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build Step Outcome: **${{ steps.docker_build.outcome }}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Overall Job Status: **${{ job.status }}**" >> "$GITHUB_STEP_SUMMARY"
