@@ -75,3 +75,4 @@ container-build-and-scan:
           echo "- Image: \`shop-api:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Build Step Outcome: **${{ steps.docker_build.outcome }}**" >> "$GITHUB_STEP_SUMMARY"
           echo "- Overall Job Status: **${{ job.status }}**" >> "$GITHUB_STEP_SUMMARY"
+
