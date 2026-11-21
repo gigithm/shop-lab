@@ -72,9 +72,9 @@ jobs:
       - name: Shift-left scan on built Docker image (HIGH & CRITICAL)
         run: trivy image --exit-code 1 --severity HIGH,CRITICAL shop-api:${{ github.sha }}
 
-      - name: Inspect brace-expansion findings if image scan fails
-        if: failure()
-        run: trivy image --severity HIGH,CRITICAL --pkg-types library --scanners vuln shop-api:${{ github.sha }} | grep -A 25 -i "brace-expansion" || true
+     # - name: Inspect brace-expansion findings if image scan fails
+     #   if: failure()
+     #   run: trivy image --severity HIGH,CRITICAL --pkg-types library --scanners vuln shop-api:${{ github.sha }} | grep -A 25 -i "brace-expansion" || true
       
       - name: Docker image build status summary
         if: always()
